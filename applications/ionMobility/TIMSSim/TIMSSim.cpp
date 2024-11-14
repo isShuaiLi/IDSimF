@@ -94,7 +94,7 @@ int main(int argc, const char * argv[]) {
         double startWidthY_m = startWidth_mm[1]/1000.0;
         double startWidthZ_m = startWidth_mm[2]/1000.0;
 
-        double paSpatialScale = simConf->doubleParameter("potential_array_scale"); // is used for all PAs in the simulation
+        double paSpatialScale = simConf->doubleParameter("potential_array_scale"); // is used for all electric PAs in the simulation
 
         // parameters of the TIMS potentials / voltages
         double gateOpenTime = simConf->doubleParameter("gate_open_time_s");
@@ -143,6 +143,7 @@ int main(int argc, const char * argv[]) {
         std::vector<std::unique_ptr<ParticleSimulation::SimionPotentialArray>> pressureField;
         std::vector<std::unique_ptr<ParticleSimulation::SimionPotentialArray>> temperatureField;
 
+        double flowPaSpatialScale = 1.0;
         if (simConf->isParameter("flow_mode")) {
             std::string flowModeStr = simConf->stringParameter("flow_mode");
             if (flowModeStr == "uniform") {
@@ -151,12 +152,13 @@ int main(int argc, const char * argv[]) {
                 flowMode = PARABOLIC_FLOW;
             } else if (flowModeStr == "static_field") {
                 flowMode = STATIC_FIELD;
+                flowPaSpatialScale = simConf->doubleParameter("flow_field_scale"); // is used for all electric PAs in the simulation
                 flowField =
-                    simConf->readPotentialArrays("flow_field", paSpatialScale, false);
+                    simConf->readPotentialArrays("flow_field", flowPaSpatialScale, false);
                 pressureField =
-                    simConf->readPotentialArrays("pressure_field", paSpatialScale, false);
+                    simConf->readPotentialArrays("pressure_field", flowPaSpatialScale, false);
                 temperatureField =
-                    simConf->readPotentialArrays("temperature_field", paSpatialScale, false);
+                    simConf->readPotentialArrays("temperature_field", flowPaSpatialScale, false);
 
                 pressureFct = CollisionModel::getVariableScalarFunction(*pressureField[0]);
                 backgroundTemperatureFct = CollisionModel::getVariableScalarFunction(*temperatureField[0]);
@@ -164,8 +166,6 @@ int main(int argc, const char * argv[]) {
                 if(flowField.size() == 2) {
                     // 2d axial symmetric flow field
                     logger->info("2d axial symmetric flow field");
-                    flowField[0]->printState();
-                    flowField[1]->printState();
                     velocityFct = CollisionModel::getVariableAxialSymmetricVectorFunction(*flowField[0], *flowField[1]);
                 }
                 else if(flowField.size() == 3) {
@@ -195,7 +195,7 @@ int main(int argc, const char * argv[]) {
         }
         if (flowMode == UNIFORM_FLOW || flowMode == PARABOLIC_FLOW) {
             double backgroundPressure_Pa = simConf->doubleParameter("background_pressure_Pa");
-            double gasVelocityX = simConf->doubleParameter("background_velocity_x_ms-1");
+            Core::Vector gasVelocity = simConf->vector3dParameter("background_velocity_ms-1");
             double backgroundTemperature_K = simConf->doubleParameter("background_temperature_K");
 
             pressureFct = CollisionModel::getConstantScalarFunction(backgroundPressure_Pa);
@@ -203,14 +203,18 @@ int main(int argc, const char * argv[]) {
 
             // define spatial functions for uniform and parabolic
             if(flowMode == UNIFORM_FLOW) {
-                velocityFct = CollisionModel::getConstantVectorFunction({gasVelocityX, 0.0, 0.0});
+                velocityFct = CollisionModel::getConstantVectorFunction({gasVelocity.x(), gasVelocity.y(), gasVelocity.z()});
             }
             else if(flowMode == PARABOLIC_FLOW){
+
+                if (Core::isDoubleUnequal(gasVelocity.y(), 0.0) || Core::isDoubleUnequal(gasVelocity.z(), 0.0)) {
+                    logger->warn("Parabolic flow with non zero y and z velocity components! y and z components are ignored!");
+                }
                 double flowProfileMaxRadius_m = simConf->doubleParameter("flow_profile_maximum_radius_m");
-                velocityFct = [gasVelocityX, flowProfileMaxRadius_m](const Core::Vector& pos) {
+                velocityFct = [gasVelocity, flowProfileMaxRadius_m](const Core::Vector& pos) {
                     //parabolic profile is vX = 2 * Vavg * (1 - r^2 / R^2) with the electrode radius R
                     double radial_dist = std::sqrt(pos.y()*pos.y() + pos.z()*pos.z())/flowProfileMaxRadius_m ;
-                    double xVelo = gasVelocityX*2.0*(1-radial_dist);
+                    double xVelo = gasVelocity.x()*2.0*(1-radial_dist);
                     if (xVelo < 0.0) {
                         xVelo = 0.0;
                     }
@@ -405,7 +409,11 @@ int main(int argc, const char * argv[]) {
                              omega, V_rf, gateOpenTime, gateOpenDuration, gateVoltage, gradientStartTime, gradientDuration, gradientVelocity]
                                      (double time){
             for(size_t i=0; i<PotentialArrays.size(); i++) {
-                totalFieldNow[i] = DCVoltages[i] + sin(time*omega) * (V_rf * RFFactor[i]);
+                double rf_field = sin(time*omega) * (V_rf * RFFactor[i]);
+//                if (i<2) {
+//                    std::cout << rf_field<< " ";
+//                }
+                totalFieldNow[i] = DCVoltages[i] + rf_field;
 
                 if (time >= gateOpenTime && time <= (gateOpenTime + gateOpenDuration))
                     totalFieldNow[i] = totalFieldNow[i] + gate[i] * (gateVoltage);
@@ -415,6 +423,7 @@ int main(int argc, const char * argv[]) {
                     //std::cout <<"gradient!" <<"gi: "<< gradient[i] <<" :->"<< gradient_field<<std::endl;
                     totalFieldNow[i] = totalFieldNow[i] + gradient_field;}
             }
+//            std::cout << std::endl;
         };
 
         auto accelerationFct = [&PotentialArrays, &totalFieldNow, spaceChargeFactor]
