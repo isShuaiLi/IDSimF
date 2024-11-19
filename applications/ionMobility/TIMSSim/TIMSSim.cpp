@@ -453,10 +453,15 @@ int main(int argc, const char * argv[]) {
 
         };
 
+        // Prepare ion start / stop tracker and ion start monitoring / ion termination functions
+        ParticleSimulation::ParticleStartSplatTracker startSplatTracker;
+        auto particleStartMonitoringFct = [&startSplatTracker](Core::Particle* particle, double time) {
+            startSplatTracker.particleStart(particle, time);
+        };
 
         auto timestepWriteFct =
                 [&trajectoryWriter, &voltageWriter, trajectoryWriteInterval, &rsSim, &resultFilewriter, concentrationWriteInterval,
-                        &totalFieldNow, &logger, &ionsInactive]
+                        &totalFieldNow, &logger, &ionsInactive, &startSplatTracker]
                         (
                                 Integration::AbstractTimeIntegrator* /*integrator*/,
                                 std::vector<Core::Particle*>& particles, double time, int timestep,
@@ -470,6 +475,7 @@ int main(int argc, const char * argv[]) {
                     if (lastTimestep) {
                         trajectoryWriter.writeTimestep(particles, time);
                         trajectoryWriter.writeSplatTimes(particles);
+                        trajectoryWriter.writeStartSplatData(startSplatTracker);
                         trajectoryWriter.finalizeTrajectory();
                         logger->info("finished ts:{} time:{:.2e}", timestep, time);
                     }
@@ -480,12 +486,6 @@ int main(int argc, const char * argv[]) {
                         trajectoryWriter.writeTimestep(particles, time);
                     }
                 };
-
-        // Prepare ion start / stop tracker and ion start monitoring / ion termination functions
-        ParticleSimulation::ParticleStartSplatTracker startSplatTracker;
-        auto particleStartMonitoringFct = [&startSplatTracker](Core::Particle* particle, double time) {
-            startSplatTracker.particleStart(particle, time);
-        };
 
         auto otherActionsFct = [&simulationDomainBoundaries, &ionsInactive, &PotentialArrays, &V_rf, &startSplatTracker](
                 Core::Vector& newPartPos, Core::Particle* particle,
